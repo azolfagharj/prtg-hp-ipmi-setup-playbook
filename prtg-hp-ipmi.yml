@@ -1,0 +1,112 @@
+---
+# Program Name: Add HP IPMI Ping and Fans to PRTG
+# Version: 1.0.5
+# Date: 2024-09-10
+# Author: Alireza Zolfaghar
+# GitHub: https://github.com/azolfagharj
+# Email: azolfagharj@gmail.com
+
+# This Ansible playbook clones a device in PRTG, updates its IP and name, and renames
+# specific sensors such as Ping and Fan Monitoring. It then activates the new device.
+
+- name: Clone and Configure Device and Sensors
+  hosts: localhost
+  gather_facts: no  # No need to gather facts as we are working with API calls
+  vars:
+    prefix: "XXXX"          # Change this to the static prefix for your new device names
+    device_id: "XXXX"     # Change this to the ID of the device you want to clone in PRTG
+    group_id: "XXXX"       # Change this to the ID of the group where you want the new device added
+    prtg_host: "https://YOUR.PRTG.ADDRESS"  # Replace with your PRTG server URL
+    prtg_user: "YOURPRTGUSER"  # Replace with your PRTG admin username
+    prtg_pass: "YOURPRTGPASSWORD"  # Replace with your PRTG admin password (hashed)
+
+  tasks:
+
+    # Task to display program information
+    - name: Display program information
+      debug:
+        msg:
+          - "Program Name: Add HP IPMI Ping and Fans to PRTG"
+          - "Version: 1.0.5"
+          - "Date: 2024-09-10"
+          - "Author: Alireza Zolfaghar"
+          - "GitHub: https://github.com/azolfagharj"
+          - "Email: azolfagharj@gmail.com"
+
+    # Step 1: Clone the device in PRTG
+    # This task sends a GET request to clone the device with the specified ID and adds it to the group
+    - name: Clone device
+      uri:
+        url: "{{ prtg_host }}/api/duplicateobject.htm?id={{ device_id }}&name={{ prefix }}{{ server_name }}&targetid={{ group_id }}&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        return_content: yes
+        validate_certs: no  # Set this to "yes" if you want SSL validation
+      register: clone_response  # Register the response to use later
+
+    # Step 2: Retrieve the newly created device's ID by searching the devices in the group
+    - name: Extract new device ID
+      uri:
+        url: "{{ prtg_host }}/api/table.json?content=devices&columns=objid&filter_parentid={{ group_id }}&filter_name={{ prefix }}{{ server_name }}&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        return_content: yes
+        validate_certs: no
+      register: new_device_response  # Register the response to extract the device ID
+
+    # Step 3: Save the new device's ID in a fact for further use
+    - name: Set new device ID fact
+      set_fact:
+        new_device_id: "{{ new_device_response.json.devices[0].objid }}"  # Extract the first device ID
+
+    # Step 4: Update the IP address of the newly cloned device
+    # This task assigns the specified IP address to the new device
+    - name: Update IP address of the new device
+      uri:
+        url: "{{ prtg_host }}/api/setobjectproperty.htm?id={{ new_device_id }}&name=host&value={{ server_ip }}&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        validate_certs: no  # Set this to "yes" if you want SSL validation
+
+    # Step 5: Update the name of the newly cloned device to match the desired name
+    - name: Update name of the new device
+      uri:
+        url: "{{ prtg_host }}/api/setobjectproperty.htm?id={{ new_device_id }}&name=name&value={{ prefix }}{{ server_name }}&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        validate_certs: no
+
+    # Step 6: Retrieve the sensors associated with the new device
+    # We are filtering sensors based on the parent device ID
+    - name: Update sensor names
+      uri:
+        url: "{{ prtg_host }}/api/table.json?content=sensors&columns=objid,name&filter_parentid={{ new_device_id }}&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        return_content: yes
+        validate_certs: no
+      register: sensors_response  # Store the response to access sensor IDs
+
+    # Step 7: Identify and update the Ping sensor
+    - name: Set Ping sensor ID fact
+      set_fact:
+        ping_sensor_id: "{{ sensors_response.json.sensors | selectattr('name', 'search', 'Ping') | map(attribute='objid') | first }}"  # Select the Ping sensor
+
+    - name: Update Ping sensor name
+      uri:
+        url: "{{ prtg_host }}/api/setobjectproperty.htm?id={{ ping_sensor_id }}&name=name&value=Ping&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        validate_certs: no
+
+    # Step 8: Identify and update the Fan Monitoring sensor
+    - name: Set Fan Monitoring sensor ID fact
+      set_fact:
+        fan_sensor_id: "{{ sensors_response.json.sensors | selectattr('name', 'search', 'Fan Monitoring') | map(attribute='objid') | first }}"  # Select the Fan Monitoring sensor
+
+    - name: Update Fan Monitoring sensor name
+      uri:
+        url: "{{ prtg_host }}/api/setobjectproperty.htm?id={{ fan_sensor_id }}&name=name&value={{ 'Fan%20Monitoring' }}&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        validate_certs: no
+
+    # Step 9: Activate the newly cloned device in PRTG
+    - name: Activate new device
+      uri:
+        url: "{{ prtg_host }}/api/pause.htm?id={{ new_device_id }}&action=1&username={{ prtg_user }}&passhash={{ prtg_pass }}"
+        method: GET
+        validate_certs: no
